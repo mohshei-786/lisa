@@ -625,20 +625,50 @@ class BmiDeployer:
     def _wait_for_all_nat_ports(
         self, host: str, node_contexts: List[BmiNodeContext]
     ) -> None:
+        # A reachable TCP socket on the NAT port only confirms that
+        # iptables is forwarding; the BMI sshd may still be booting and
+        # will RST the banner read. Probe the SSH banner itself so we
+        # don't hand a half-booted node to LISA (which then fails with
+        # "Error reading SSH protocol banner").
         deadline = time.monotonic() + self._runbook.ready_timeout
-        pending = [ctx.public_port for ctx in node_contexts]
+        pending = list(node_contexts)
+        last_log = 0.0
         while pending and time.monotonic() < deadline:
-            still_pending: List[int] = []
-            for port in pending:
-                try:
-                    with socket.create_connection((host, port), timeout=5):
-                        self._log.debug(f"NAT port {port} reachable")
-                except (OSError, socket.timeout):
-                    still_pending.append(port)
+            still_pending: List[BmiNodeContext] = []
+            for ctx in pending:
+                if self._probe_ssh_banner(host, ctx.public_port):
+                    self._log.debug(
+                        f"BMI {ctx.name} sshd ready on {host}:{ctx.public_port}"
+                    )
+                else:
+                    still_pending.append(ctx)
             if not still_pending:
-                self._log.info("all BMI NAT ports are reachable")
+                self._log.info("all BMI nodes have responsive sshd")
                 return
+            now = time.monotonic()
+            if now - last_log > 60:
+                remaining = int(deadline - now)
+                self._log.info(
+                    f"waiting for BMI sshd: {len(still_pending)} pending "
+                    f"({[c.name for c in still_pending]}), "
+                    f"{remaining}s left of ready_timeout"
+                )
+                last_log = now
             pending = still_pending
-            time.sleep(10)
+            time.sleep(15)
         if pending:
-            raise LisaException(f"timed out waiting for NAT ports: {pending}")
+            raise LisaException(
+                "timed out waiting for BMI sshd banners on: "
+                f"{[(c.name, c.public_port) for c in pending]}"
+            )
+
+    def _probe_ssh_banner(self, host: str, port: int) -> bool:
+        # Open the socket and read up to 255 bytes. A live OpenSSH server
+        # sends "SSH-2.0-...\r\n" within a few seconds of accept().
+        try:
+            with socket.create_connection((host, port), timeout=10) as sock:
+                sock.settimeout(10)
+                data = sock.recv(255)
+                return data.startswith(b"SSH-")
+        except (OSError, socket.timeout):
+            return False

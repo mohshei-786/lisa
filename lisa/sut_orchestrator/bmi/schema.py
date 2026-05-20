@@ -114,8 +114,10 @@ class BmiPlatformSchema:
     # take well over an hour on busy capacity pools.
     deployment_timeout: int = 7200
     # Extra timeout in seconds for waiting until all NAT ports are open
-    # after deployment.
-    ready_timeout: int = 600
+    # after deployment. GB200 bare-metal nodes can take 20-30 minutes to
+    # fully boot after the ARM deployment reports Succeeded, so default to
+    # 60 minutes here. Override via -v ready_timeout:NNNN.
+    ready_timeout: int = 3600
 
     def __post_init__(self) -> None:
         # Treat passwords as secrets in logs.
