@@ -47,22 +47,24 @@ def _resolve_target_os(
 ) -> Optional[type]:
     """Return the target OS class if distro pre-filtering is enabled.
 
-    The ``enable_distro_pre_filtering`` runbook variable (default ``true``)
-    controls whether the pre-filter is active.  When set to ``false`` the
-    function returns ``None`` and all test cases are kept.
+    The ``enable_distro_pre_filtering`` runbook variable (default ``false``)
+    controls whether the pre-filter is active.  When set to ``true`` the
+    function infers the target OS and filters test cases.  When missing or
+    set to ``false`` the function returns ``None`` and all test cases are kept.
     """
     # Accept both raw dicts and VariableEntry-style mappings.
     if isinstance(variables, dict):
         raw = variables
     else:
         raw = {}
-    # Check for the gate variable.  Treat missing / empty as "true".
+    # Check for the gate variable.  Treat missing / empty as "false".
     gate = raw.get("enable_distro_pre_filtering")
-    if gate is not None:
-        # VariableEntry wraps the real value in .data; plain dicts don't.
-        val = getattr(gate, "data", gate)
-        if str(val).lower() in ("false", "0", "no"):
-            return None
+    if gate is None:
+        return None
+    # VariableEntry wraps the real value in .data; plain dicts don't.
+    val = getattr(gate, "data", gate)
+    if str(val).lower() not in ("true", "1", "yes"):
+        return None
     return infer_target_os(variables)
 
 
