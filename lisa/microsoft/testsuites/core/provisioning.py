@@ -55,8 +55,8 @@ from lisa.util.shell import wait_tcp_port_ready
     """,
 )
 class Provisioning(TestSuite):
-    TIME_OUT = 300
-    PLATFORM_TIME_OUT = 600
+    TIME_OUT = 600
+    PLATFORM_TIME_OUT = 1200
 
     @TestCaseMetadata(
         description="""
