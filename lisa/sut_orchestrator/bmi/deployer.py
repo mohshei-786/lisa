@@ -223,6 +223,40 @@ class BmiDeployer:
             )
         return self._compute_client
 
+    def get_vm_size_capabilities(
+        self, vm_size: str, location: str
+    ) -> Optional[Dict[str, str]]:
+        """Return the raw capabilities dict for ``vm_size`` at ``location``.
+
+        Queries Azure ``Microsoft.Compute/resourceSkus`` and returns the SKU's
+        ``capabilities`` list flattened into a ``{name: value}`` mapping (the
+        same shape consumed by ``AzurePlatform._resource_sku_to_capability``).
+        Returns ``None`` when the SKU is not found or the lookup fails — the
+        caller is expected to fall back to a generic capability.
+        """
+        try:
+            paged = self._cmp_client.resource_skus.list(
+                filter=f"location eq '{location}'"
+            )
+            for sku in paged:
+                if (
+                    sku.resource_type == "virtualMachines"
+                    and sku.name
+                    and sku.name.lower() == vm_size.lower()
+                ):
+                    raw: Dict[str, str] = {}
+                    if sku.capabilities:
+                        for cap in sku.capabilities:
+                            raw[cap.name] = cap.value
+                    return raw
+        except Exception as e:
+            self._log.debug(
+                f"BMI capability lookup failed for " f"'{vm_size}' in '{location}': {e}"
+            )
+            return None
+        self._log.debug(f"BMI VM size '{vm_size}' not found in location '{location}'")
+        return None
+
     def _ensure_resource_group(self, name: str, location: str) -> None:
         self._rm_client.resource_groups.create_or_update(name, {"location": location})
 

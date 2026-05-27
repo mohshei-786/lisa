@@ -13,7 +13,7 @@ SNAT/DNAT.
 from __future__ import annotations
 
 import copy
-from typing import Any, List, Optional, Type, cast
+from typing import Any, Dict, List, Optional, Type, cast
 
 from lisa import features, schema, search_space
 from lisa.environment import Environment
@@ -120,16 +120,89 @@ class BmiPlatform(Platform):
         return True
 
     def _build_bmi_capability(self) -> schema.NodeSpace:
-        """Build a generous capability NodeSpace for the BMI fleet.
+        """Build a capability NodeSpace for the BMI fleet.
 
-        BMIs are large bare-metal machines (e.g. GB200 with high core,
-        memory and GPU counts and Sriov-capable NICs). We advertise an
-        accommodating capability so that perf/feature tests with explicit
-        ``node_requirement`` constraints can be matched and dispatched.
+        BMI runs on Azure-managed bare-metal VMs, so the same
+        ``Microsoft.Compute/resourceSkus`` API exposes the real per-SKU
+        limits (vCPU, memory, GPU, NIC, data-disk count, etc.). We query
+        that for ``bmi_vm_size`` and translate the raw capability dict
+        into a generic ``schema.NodeSpace``; if the lookup fails we fall
+        back to a generous best-guess so tests are not silently skipped.
         """
         assert self._bmi_runbook is not None
+        assert self._deployer is not None
+
+        raw_caps = self._deployer.get_vm_size_capabilities(
+            self._bmi_runbook.bmi_vm_size, self._bmi_runbook.location
+        )
+        if raw_caps:
+            self._log.info(
+                f"BMI capability resolved from Azure resourceSkus for "
+                f"'{self._bmi_runbook.bmi_vm_size}' in "
+                f"'{self._bmi_runbook.location}': {raw_caps}"
+            )
+            return self._capability_from_raw(raw_caps)
+
+        self._log.info(
+            f"BMI capability for '{self._bmi_runbook.bmi_vm_size}' not "
+            f"resolved from Azure; using generous fallback capability."
+        )
+        return self._fallback_capability()
+
+    def _capability_from_raw(self, raw_caps: Dict[str, str]) -> schema.NodeSpace:
+        """Translate an Azure resourceSku capabilities dict into a NodeSpace.
+
+        Mirrors the numeric/limit portion of
+        ``AzurePlatform._resource_sku_to_capability`` without dragging in
+        Azure-only feature settings (BMI exposes its own ``supported_features``
+        list). ``raw_caps`` is the flattened ``{name: value}`` mapping for
+        the SKU's ``capabilities`` array.
+        """
+        assert self._bmi_runbook is not None
+        cap = schema.NodeSpace(
+            node_count=1,
+            core_count=0,
+            memory_mb=0,
+            gpu_count=0,
+        )
+
+        # vCPU: prefer vCPUsAvailable, fall back to vCPUs.
+        vcpus_available = int(raw_caps.get("vCPUsAvailable", "0") or "0")
+        if vcpus_available:
+            cap.core_count = vcpus_available
+        else:
+            cap.core_count = int(raw_caps.get("vCPUs", "0") or "0")
+
+        memory_value = raw_caps.get("MemoryGB", None)
+        if memory_value:
+            cap.memory_mb = int(float(memory_value) * 1024)
+
+        gpus = raw_caps.get("GPUs", None)
+        if gpus:
+            cap.gpu_count = int(gpus)
+
+        cap.disk = schema.DiskOptionSettings()
+        max_disk_count = raw_caps.get("MaxDataDiskCount", None)
+        if max_disk_count:
+            cap.disk.max_data_disk_count = int(max_disk_count)
+            cap.disk.data_disk_count = search_space.IntRange(max=int(max_disk_count))
+
+        cap.network_interface = schema.NetworkInterfaceOptionSettings()
+        max_nic_count = raw_caps.get("MaxNetworkInterfaces", None)
+        if max_nic_count:
+            sku_nic_count = int(max_nic_count) or 1
+            cap.network_interface.nic_count = search_space.IntRange(
+                min=1, max=sku_nic_count
+            )
+            cap.network_interface.max_nic_count = sku_nic_count
+
+        return cap
+
+    def _fallback_capability(self) -> schema.NodeSpace:
+        """Generous best-guess capability used when SKU lookup fails."""
+        assert self._bmi_runbook is not None
         cap = schema.NodeSpace()
-        cap.node_count = self._bmi_runbook.bmi_count
+        cap.node_count = 1
         cap.core_count = search_space.IntRange(min=1, max=4096)
         # 8 TiB upper bound – well above any current BMI SKU.
         cap.memory_mb = search_space.IntRange(min=512, max=8 * 1024 * 1024)
