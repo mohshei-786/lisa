@@ -465,6 +465,8 @@ def perf_ntttcp(  # noqa: C901
         # to avoid lengthening every test.
         client_core_count = client.tools[Lscpu].get_core_count()
         run_time_seconds = 120 if client_core_count > 64 else 10
+        warm_up_time_seconds = 5 if client_core_count > 64 else 1
+        cool_down_time_seconds = 5 if client_core_count > 64 else 1
         perf_ntttcp_message_list: List[
             Union[NetworkTCPPerformanceMessage, NetworkUDPPerformanceMessage]
         ] = []
@@ -536,6 +538,8 @@ def perf_ntttcp(  # noqa: C901
                         buffer_size=buffer_size,
                         dev_differentiator=dev_differentiator,
                         udp_mode=udp_mode,
+                        cool_down_time_seconds=cool_down_time_seconds,
+                        warm_up_time_seconds=warm_up_time_seconds,
                     )
 
                     # Start lagscope client to measure latency during the
@@ -561,6 +565,8 @@ def perf_ntttcp(  # noqa: C901
                         threads_count=num_threads_n,
                         ports_count=num_threads_p,
                         run_time_seconds=run_time_seconds,
+                        cool_down_time_seconds=cool_down_time_seconds,
+                        warm_up_time_seconds=warm_up_time_seconds,
                         dev_differentiator=dev_differentiator,
                         udp_mode=udp_mode,
                     )
