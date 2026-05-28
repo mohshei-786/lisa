@@ -66,7 +66,7 @@ _OS_ALIASES: Dict[str, str] = {
 # inferred.
 _IMAGE_VAR_KEYS = (
     "marketplace_image",
-    "shared_gallery_image",
+    "shared_gallery",
     "community_gallery_image",
     "vhd",
     "image",
