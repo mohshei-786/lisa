@@ -67,39 +67,26 @@ class BmiPlatform(Platform):
         self._deployer = BmiDeployer(runbook=runbook, log=self._log)
 
     def _prepare_environment(self, environment: Environment, log: Logger) -> bool:
-        # The BMI fleet size is driven by ``nodes_requirement`` when the
-        # environment has one: a test asking for N nodes triggers a deploy
-        # of exactly N BMIs. The runbook's ``bmi_count`` is used only as
-        # the fallback when no requirement is given (e.g. environments
-        # declared as ``nodes: []``). The Bicep template caps the count
-        # at 16; we clamp to the same range.
+        # The BMI fleet size is driven entirely by ``nodes_requirement``,
+        # mirroring how ``AzurePlatform._prepare_environment`` works: a test
+        # asking for N nodes triggers a deploy of exactly N BMIs. There is
+        # no static ``bmi_count`` fallback.
         assert self._bmi_runbook is not None
         if not environment.runbook.nodes_requirement:
             return True
 
         required = len(environment.runbook.nodes_requirement)
-        clamped = max(1, min(required, 16))
-        if clamped != self._bmi_runbook.bmi_count:
-            log.info(
-                f"BMI fleet auto-sized to {clamped} node(s) from "
-                f"environment requirement (runbook default was "
-                f"{self._bmi_runbook.bmi_count})."
-            )
-            self._bmi_runbook.bmi_count = clamped
-        if clamped < required:
-            log.warn_or_raise(
-                environment.warn_as_error,
-                f"BMI platform supports at most 16 nodes; environment "
-                f"requires {required}.",
-            )
-            return False
+        self._bmi_runbook.bmi_count = required
+        log.info(
+            f"BMI fleet sized to {required} node(s) from environment " f"requirement."
+        )
 
         # Reload requirement so feature settings deserialize to typed
-        # objects, then match each requirement against a generous BMI
-        # fleet capability. Without populating concrete capability values
-        # here, LISA's matcher sees ``capability is None`` for any test
-        # that has a real requirement (memory, Sriov, gpu, ...) and skips
-        # the test before deploy is attempted.
+        # objects, then match each requirement against the real BMI SKU
+        # capability fetched from Azure ``resourceSkus``. Without populating
+        # concrete capability values here, LISA's matcher sees
+        # ``capability is None`` for any test that has a real requirement
+        # (memory, Sriov, gpu, ...) and skips the test before deploy.
         environment.runbook.reload_requirements()
         bmi_capability = self._build_bmi_capability()
 
@@ -126,8 +113,8 @@ class BmiPlatform(Platform):
         ``Microsoft.Compute/resourceSkus`` API exposes the real per-SKU
         limits (vCPU, memory, GPU, NIC, data-disk count, etc.). We query
         that for ``bmi_vm_size`` and translate the raw capability dict
-        into a generic ``schema.NodeSpace``; if the lookup fails we fall
-        back to a generous best-guess so tests are not silently skipped.
+        into a generic ``schema.NodeSpace``. If the lookup fails we raise
+        – there is no static fallback.
         """
         assert self._bmi_runbook is not None
         assert self._deployer is not None
@@ -135,19 +122,19 @@ class BmiPlatform(Platform):
         raw_caps = self._deployer.get_vm_size_capabilities(
             self._bmi_runbook.bmi_vm_size, self._bmi_runbook.location
         )
-        if raw_caps:
-            self._log.info(
-                f"BMI capability resolved from Azure resourceSkus for "
-                f"'{self._bmi_runbook.bmi_vm_size}' in "
-                f"'{self._bmi_runbook.location}': {raw_caps}"
+        if not raw_caps:
+            raise LisaException(
+                f"BMI capability for '{self._bmi_runbook.bmi_vm_size}' in "
+                f"'{self._bmi_runbook.location}' could not be resolved from "
+                f"Azure resourceSkus; cannot proceed without real SKU "
+                f"capability values."
             )
-            return self._capability_from_raw(raw_caps)
-
         self._log.info(
-            f"BMI capability for '{self._bmi_runbook.bmi_vm_size}' not "
-            f"resolved from Azure; using generous fallback capability."
+            f"BMI capability resolved from Azure resourceSkus for "
+            f"'{self._bmi_runbook.bmi_vm_size}' in "
+            f"'{self._bmi_runbook.location}': {raw_caps}"
         )
-        return self._fallback_capability()
+        return self._capability_from_raw(raw_caps)
 
     def _capability_from_raw(self, raw_caps: Dict[str, str]) -> schema.NodeSpace:
         """Translate an Azure resourceSku capabilities dict into a NodeSpace.
@@ -196,21 +183,6 @@ class BmiPlatform(Platform):
             )
             cap.network_interface.max_nic_count = sku_nic_count
 
-        return cap
-
-    def _fallback_capability(self) -> schema.NodeSpace:
-        """Generous best-guess capability used when SKU lookup fails."""
-        assert self._bmi_runbook is not None
-        cap = schema.NodeSpace()
-        cap.node_count = 1
-        cap.core_count = search_space.IntRange(min=1, max=4096)
-        # 8 TiB upper bound – well above any current BMI SKU.
-        cap.memory_mb = search_space.IntRange(min=512, max=8 * 1024 * 1024)
-        cap.gpu_count = search_space.IntRange(min=0, max=16)
-        cap.disk = schema.DiskOptionSettings()
-        # Default NetworkInterfaceOptionSettings advertises both Synthetic
-        # and Sriov data paths.
-        cap.network_interface = schema.NetworkInterfaceOptionSettings()
         return cap
 
     def _deploy_environment(self, environment: Environment, log: Logger) -> None:
