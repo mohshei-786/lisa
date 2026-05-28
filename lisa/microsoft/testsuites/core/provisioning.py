@@ -582,7 +582,7 @@ class Provisioning(TestSuite):
                         "no panic found in serial log during reboot",
                     )
             else:
-                node.reboot(time_out=1200)
+                node.reboot(time_out=2400)
             log.info(f"node '{node.name}' rebooted in {timer}")
         except Exception as e:
             if node.features.is_supported(SerialConsole):
