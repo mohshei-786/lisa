@@ -74,7 +74,7 @@ class Reboot(Tool):
                 raise BadEnvironmentStateException(f"after reboot, {e}")
             raise e
 
-    def reboot(self, time_out: int = 300) -> None:
+    def reboot(self, time_out: int = 1800) -> None:
         timer = create_timer()
 
         last_boot_time = self._get_last_boot_time()
@@ -119,10 +119,12 @@ class Reboot(Tool):
         tried_times: int = 0
         while (timer.elapsed(False) < time_out) or tried_times < 1:
             tried_times += 1
+            probe_ok = False
             try:
                 self.node.close()
                 current_boot_time = self._get_last_boot_time()
                 connected = True
+                probe_ok = True
             except FunctionTimedOut as e:
                 # The FunctionTimedOut must be caught separated, or the process
                 # will exit.
@@ -130,7 +132,13 @@ class Reboot(Tool):
             except Exception as e:
                 # error is ignorable, as ssh may be closed suddenly.
                 self._log.debug(f"ignorable ssh exception: {e}")
-            self._log.debug(f"reconnected with uptime: {current_boot_time}")
+            if probe_ok:
+                self._log.debug(f"reconnected with uptime: {current_boot_time}")
+            else:
+                self._log.debug(
+                    f"node still unreachable, retrying "
+                    f"({int(timer.elapsed(False))}s/{time_out}s)"
+                )
             if last_boot_time < current_boot_time:
                 break
         if last_boot_time == current_boot_time:
