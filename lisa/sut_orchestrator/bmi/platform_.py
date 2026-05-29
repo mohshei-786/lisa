@@ -198,9 +198,11 @@ class BmiPlatform(Platform):
             # Reuse-existing path still needs to know the jumphost IP and
             # BMI IPs. Without re-deploying we ask the deployer to just
             # collect those.
-            info = self._deployer.deploy()  # idempotent: ARM incremental mode
+            info = self._deployer.deploy(
+                environment=environment
+            )  # idempotent: ARM incremental mode
         else:
-            info = self._deployer.deploy()
+            info = self._deployer.deploy(environment=environment)
 
         self._deployment_info = info
 

@@ -35,8 +35,9 @@ from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
 from azure.mgmt.resource import ResourceManagementClient
 
+from lisa.environment import Environment
 from lisa.sut_orchestrator.azure.common import StaticAccessTokenCredential
-from lisa.util import LisaException
+from lisa.util import LisaException, plugin_manager
 from lisa.util.logger import Logger
 
 from .schema import BmiDeploymentInfo, BmiNodeContext, BmiPlatformSchema
@@ -55,11 +56,14 @@ class BmiDeployer:
         self._resource_client: Optional[ResourceManagementClient] = None
         self._network_client: Optional[NetworkManagementClient] = None
         self._compute_client: Optional[ComputeManagementClient] = None
+        # Set by deploy() so _deploy_template can pass it through pluggy hooks.
+        self._environment: Optional[Environment] = None
 
     # ─── public API ─────────────────────────────────────────────────────
 
-    def deploy(self) -> BmiDeploymentInfo:
+    def deploy(self, environment: Optional[Environment] = None) -> BmiDeploymentInfo:
         """Create the full BMI environment and return its connection info."""
+        self._environment = environment
         self._validate_runbook()
         rg_name = self._resolve_rg_name()
         location = self._runbook.location
@@ -264,6 +268,14 @@ class BmiDeployer:
         with _TEMPLATE_FILE.open("r", encoding="utf-8") as f:
             template_body = json.load(f)
         parameters = self._build_template_parameters(rg_name)
+
+        # Let extensions mutate the template before submission (e.g. inject
+        # additional NSG rules for trusted Microsoft service tags + agent IP).
+        plugin_manager.hook.bmi_update_arm_template(
+            template=template_body,
+            parameters=parameters,
+            environment=self._environment,
+        )
 
         # Persist the rendered template + parameters for debugging.
         log_dir = Path.cwd()
