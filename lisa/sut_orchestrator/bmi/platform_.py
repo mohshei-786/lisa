@@ -234,6 +234,19 @@ class BmiPlatform(Platform):
             if isinstance(node, RemoteNode):
                 node.set_connection_info_by_runbook()
             node.initialize()
+            # Stash jumphost + internal-IP info so the generic Reboot tool
+            # can probe BMI:22 directly via the jumphost when DNAT/NAT-port
+            # reconnects fail.
+            node._bmi_diag = {  # type: ignore[attr-defined]
+                "internal_ip": ctx.internal_ip,
+                "jumphost_address": ctx.public_address,
+                "jumphost_port": 22,
+                "jumphost_username": self._bmi_runbook.jumphost_username,
+                "jumphost_password": self._bmi_runbook.jumphost_password,
+                "jumphost_private_key_file": (
+                    self._bmi_runbook.jumphost_private_key_file
+                ),
+            }
             log.info(
                 f"BMI node '{ctx.name}' exposed at "
                 f"{ctx.public_address}:{ctx.public_port}"

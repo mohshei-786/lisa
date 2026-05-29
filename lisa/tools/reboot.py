@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from time import sleep
-from typing import Any, Optional, Type, cast
+from typing import Any, Dict, Optional, Type, cast
 
 from func_timeout import FunctionTimedOut, func_set_timeout
 
@@ -184,8 +184,71 @@ class Reboot(Tool):
                     f"{time.time() - start:.2f}s: "
                     f"{type(probe_err).__name__}: {probe_err}"
                 )
+            self._probe_via_jumphost()
         except Exception as diag_err:
             self._log.debug(f"diagnose helper error (ignored): {diag_err}")
+
+    def _probe_via_jumphost(self) -> None:
+        diag = getattr(self.node, "_bmi_diag", None)
+        if not diag:
+            return
+        jhost = diag.get("jumphost_address")
+        jport = int(diag.get("jumphost_port", 22))
+        juser = diag.get("jumphost_username")
+        jpw = diag.get("jumphost_password") or None
+        jkey = diag.get("jumphost_private_key_file") or None
+        bmi_ip = diag.get("internal_ip")
+        if not (jhost and juser and bmi_ip and (jpw or jkey)):
+            return
+        try:
+            import paramiko
+        except ImportError:
+            self._log.debug("paramiko not available for jumphost probe")
+            return
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        connect_kwargs: Dict[str, Any] = {
+            "hostname": jhost,
+            "port": jport,
+            "username": juser,
+            "timeout": 10,
+            "banner_timeout": 10,
+            "auth_timeout": 10,
+        }
+        if jkey:
+            connect_kwargs["key_filename"] = jkey
+        if jpw:
+            connect_kwargs["password"] = jpw
+            connect_kwargs["look_for_keys"] = False
+            connect_kwargs["allow_agent"] = False
+        try:
+            client.connect(**connect_kwargs)
+            cmd = (
+                f"set +e; "
+                f"echo '--- ping ---'; ping -c 1 -W 2 {bmi_ip}; "
+                f"echo '--- nc tcp22 ---'; "
+                f"timeout 5 bash -c '</dev/tcp/{bmi_ip}/22' "
+                f"&& echo TCP_OK || echo TCP_FAIL; "
+                f"echo '--- iptables nat ---'; "
+                f"sudo iptables -t nat -L PREROUTING -n -v "
+                f"| grep -E 'dpt:[0-9]+|{bmi_ip}' | head"
+            )
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=15)
+            out = stdout.read().decode(errors="replace")
+            err = stderr.read().decode(errors="replace")
+            self._log.debug(
+                f"jumphost probe via {jhost} -> {bmi_ip}:\n{out}\n{err}".rstrip()
+            )
+        except Exception as jh_err:
+            self._log.debug(
+                f"jumphost probe to {jhost} failed: "
+                f"{type(jh_err).__name__}: {jh_err}"
+            )
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 class WindowsReboot(Reboot):
