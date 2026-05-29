@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import socket
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -139,6 +140,7 @@ class Reboot(Tool):
                     f"node still unreachable, retrying "
                     f"({int(timer.elapsed(False))}s/{time_out}s)"
                 )
+                self._diagnose_unreachable()
             if last_boot_time < current_boot_time:
                 break
         if last_boot_time == current_boot_time:
@@ -150,6 +152,40 @@ class Reboot(Tool):
                 raise LisaException(
                     "timeout to wait reboot, the node may stuck on reboot command."
                 )
+
+    def _diagnose_unreachable(self) -> None:
+        # Temporary diagnostic: raw TCP probe to SSH endpoint to distinguish
+        # "sshd not up yet" from "SYN dropped (NSG/DNAT/host down)".
+        try:
+            from lisa.node import RemoteNode
+
+            if not isinstance(self.node, RemoteNode):
+                return
+            info = self.node.connection_info
+            host = info.get(constants.ENVIRONMENTS_NODES_REMOTE_ADDRESS)
+            port = info.get(constants.ENVIRONMENTS_NODES_REMOTE_PORT, 22)
+            if not host:
+                return
+            start = time.time()
+            try:
+                with socket.create_connection((host, int(port)), timeout=5) as sock:
+                    sock.settimeout(3)
+                    try:
+                        banner = sock.recv(64)
+                    except socket.timeout:
+                        banner = b"<no banner within 3s>"
+                self._log.debug(
+                    f"TCP probe {host}:{port} OK in "
+                    f"{time.time() - start:.2f}s, banner={banner!r}"
+                )
+            except Exception as probe_err:
+                self._log.debug(
+                    f"TCP probe {host}:{port} FAIL in "
+                    f"{time.time() - start:.2f}s: "
+                    f"{type(probe_err).__name__}: {probe_err}"
+                )
+        except Exception as diag_err:
+            self._log.debug(f"diagnose helper error (ignored): {diag_err}")
 
 
 class WindowsReboot(Reboot):
