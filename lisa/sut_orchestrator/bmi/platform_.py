@@ -246,6 +246,14 @@ class BmiPlatform(Platform):
                 "jumphost_private_key_file": (
                     self._bmi_runbook.jumphost_private_key_file
                 ),
+                # Self-heal NSG rule when the agent's SNAT egress IP rotates
+                # mid-run (silent NSG drop fingerprint = TCP timeout to both
+                # public NAT port and jumphost:22). The deployer throttles.
+                "nsg_refresh": (
+                    lambda rg=info.resource_group: (
+                        self._deployer.refresh_nsg_for_agent_ip(rg)
+                    )
+                ),
             }
             log.info(
                 f"BMI node '{ctx.name}' exposed at "

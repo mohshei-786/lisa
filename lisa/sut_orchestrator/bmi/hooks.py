@@ -33,5 +33,22 @@ class BmiHookSpec:
         """
         ...
 
+    @hookspec
+    def bmi_refresh_nsg_for_agent_ip(
+        self,
+        net_client: Any,
+        rg_name: str,
+        nsg_name: str,
+        dest_ports: Any,
+    ) -> None:
+        """Refresh agent-IP-based NSG rule with the current external IP.
+
+        Called when LISA detects the active connection back to the BMI
+        environment has been silently dropped (NSG fingerprint), typically
+        because the pipeline agent's SNAT egress IP has rotated since the
+        deploy-time snapshot.
+        """
+        ...
+
 
 plugin_manager.add_hookspecs(BmiHookSpec)

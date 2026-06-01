@@ -58,6 +58,9 @@ class BmiDeployer:
         self._compute_client: Optional[ComputeManagementClient] = None
         # Set by deploy() so _deploy_template can pass it through pluggy hooks.
         self._environment: Optional[Environment] = None
+        # Throttle agent-IP NSG refresh: at most one Azure update per minute.
+        self._last_nsg_refresh_ts: float = 0.0
+        self._nsg_refresh_min_interval_s: float = 60.0
 
     # ─── public API ─────────────────────────────────────────────────────
 
@@ -149,6 +152,36 @@ class BmiDeployer:
             poller.wait(timeout=self._runbook.deployment_timeout)
         except ResourceNotFoundError:
             self._log.info(f"resource group '{rg_name}' is already gone")
+
+    def refresh_nsg_for_agent_ip(self, rg_name: str) -> None:
+        """Re-resolve the LISA agent's external IP and update the NSG.
+
+        Throttled to ``_nsg_refresh_min_interval_s`` to avoid hammering ARM
+        when the reboot tool retries connection probes back-to-back. Fans
+        out to all registered ``bmi_refresh_nsg_for_agent_ip`` hook
+        implementations (e.g. ``extensions.bmi_nsg_enablement``).
+        """
+        now = time.time()
+        if now - self._last_nsg_refresh_ts < self._nsg_refresh_min_interval_s:
+            return
+        self._last_nsg_refresh_ts = now
+        nsg_name = f"{rg_name}_nsg"
+        nat_start = int(self._runbook.nat_port_start)
+        bmi_count = int(self._runbook.bmi_count)
+        nat_range = f"{nat_start}-{nat_start + bmi_count - 1}"
+        dest_ports = ["22", nat_range]
+        self._log.info(
+            f"BMI NSG refresh: triggering for rg='{rg_name}' nsg='{nsg_name}'"
+        )
+        try:
+            plugin_manager.hook.bmi_refresh_nsg_for_agent_ip(
+                net_client=self._net_client,
+                rg_name=rg_name,
+                nsg_name=nsg_name,
+                dest_ports=dest_ports,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._log.warning(f"BMI NSG refresh hook error (ignored): {e}")
 
     # ─── runbook validation ────────────────────────────────────────────
 

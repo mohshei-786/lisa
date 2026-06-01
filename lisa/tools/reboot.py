@@ -184,6 +184,14 @@ class Reboot(Tool):
                     f"{time.time() - start:.2f}s: "
                     f"{type(probe_err).__name__}: {probe_err}"
                 )
+                # Silent timeout to a deploy-time-reachable port is the NSG
+                # drop fingerprint (vs. RST = sshd-down). On BMI, the most
+                # common cause is the pipeline agent's SNAT egress IP
+                # rotating away from the /32 captured at deploy. Ask the
+                # platform to re-resolve the agent IP and refresh the NSG
+                # rule. The platform throttles so this is safe to call on
+                # every retry.
+                self._maybe_refresh_nsg()
             self._probe_via_jumphost()
         except Exception as diag_err:
             self._log.debug(f"diagnose helper error (ignored): {diag_err}")
@@ -249,6 +257,18 @@ class Reboot(Tool):
                 client.close()
             except Exception:
                 pass
+
+    def _maybe_refresh_nsg(self) -> None:
+        diag = getattr(self.node, "_bmi_diag", None)
+        if not diag:
+            return
+        refresh = diag.get("nsg_refresh")
+        if not callable(refresh):
+            return
+        try:
+            refresh()
+        except Exception as e:
+            self._log.debug(f"nsg_refresh failed (ignored): {e}")
 
 
 class WindowsReboot(Reboot):
