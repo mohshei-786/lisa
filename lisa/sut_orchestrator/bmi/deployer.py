@@ -662,10 +662,15 @@ class BmiDeployer:
 
             for cmd in commands:
                 self._run_ssh(client, cmd)
+            # Keep client open for the readiness wait so we can probe BMI
+            # sshd from inside the VNet (bypasses NSG / fabric NAT path)
+            # and run ARP-flush self-heal when only the external path is
+            # stuck.
+            self._wait_for_all_nat_ports(
+                jumphost_public_ip, node_contexts, jumphost_client=client
+            )
         finally:
             client.close()
-
-        self._wait_for_all_nat_ports(jumphost_public_ip, node_contexts)
 
     def _run_ssh(self, client: Any, command: str) -> None:
         # Encode the script in base64 so the remote login shell does not
@@ -702,44 +707,125 @@ class BmiDeployer:
         )
 
     def _wait_for_all_nat_ports(
-        self, host: str, node_contexts: List[BmiNodeContext]
+        self,
+        host: str,
+        node_contexts: List[BmiNodeContext],
+        jumphost_client: Any = None,
     ) -> None:
-        # A reachable TCP socket on the NAT port only confirms that
-        # iptables is forwarding; the BMI sshd may still be booting and
-        # will RST the banner read. Probe the SSH banner itself so we
-        # don't hand a half-booted node to LISA (which then fails with
-        # "Error reading SSH protocol banner").
+        # Two-stage readiness: probe the BMI sshd banner BOTH from inside
+        # the jumphost (internal /24 path, bypasses NSG and the SDN edge)
+        # and from this agent through the public NAT. Only mark ready when
+        # both paths see the banner. If only the internal probe passes for
+        # too long, the external delivery to BMI is wedged - flush the
+        # jumphost ARP entry for the BMI to force re-resolution.
         deadline = time.monotonic() + self._runbook.ready_timeout
         pending = list(node_contexts)
         last_log = 0.0
+        # per-node monotonic ts of first observed internal-only ready
+        internal_only_since: Dict[str, float] = {}
+        # per-node monotonic ts of last ARP flush attempt
+        last_arp_flush: Dict[str, float] = {}
         while pending and time.monotonic() < deadline:
             still_pending: List[BmiNodeContext] = []
             for ctx in pending:
-                if self._probe_ssh_banner(host, ctx.public_port):
+                internal_ok = self._probe_internal_ssh_banner(
+                    jumphost_client, ctx.internal_ip
+                )
+                external_ok = self._probe_ssh_banner(host, ctx.public_port)
+                if internal_ok and external_ok:
                     self._log.debug(
                         f"BMI {ctx.name} sshd ready on {host}:{ctx.public_port}"
                     )
+                    internal_only_since.pop(ctx.name, None)
+                    last_arp_flush.pop(ctx.name, None)
+                    continue
+                still_pending.append(ctx)
+                now = time.monotonic()
+                if internal_ok and not external_ok:
+                    first = internal_only_since.setdefault(ctx.name, now)
+                    stuck_for = now - first
+                    last_flush = last_arp_flush.get(ctx.name, 0.0)
+                    # After 60s of internal-ok / external-fail, refresh
+                    # ARP. Re-fire every 120s while still wedged.
+                    if stuck_for > 60 and (now - last_flush) > 120:
+                        self._log.info(
+                            f"BMI {ctx.name}: internal sshd ready but "
+                            f"external NAT path stuck for {int(stuck_for)}s; "
+                            f"flushing jumphost ARP for {ctx.internal_ip}"
+                        )
+                        self._flush_jumphost_arp(jumphost_client, ctx.internal_ip)
+                        last_arp_flush[ctx.name] = now
                 else:
-                    still_pending.append(ctx)
+                    internal_only_since.pop(ctx.name, None)
             if not still_pending:
                 self._log.info("all BMI nodes have responsive sshd")
                 return
             now = time.monotonic()
             if now - last_log > 60:
                 remaining = int(deadline - now)
+                stuck = sorted(internal_only_since.keys())
+                extra = f" (internal-only: {stuck})" if stuck else ""
                 self._log.info(
                     f"waiting for BMI sshd: {len(still_pending)} pending "
                     f"({[c.name for c in still_pending]}), "
-                    f"{remaining}s left of ready_timeout"
+                    f"{remaining}s left of ready_timeout{extra}"
                 )
                 last_log = now
             pending = still_pending
             time.sleep(15)
         if pending:
+            stuck = sorted(internal_only_since.keys())
+            extra = (
+                f" (sshd up internally but external NAT path never opened: {stuck})"
+                if stuck
+                else ""
+            )
             raise LisaException(
                 "timed out waiting for BMI sshd banners on: "
-                f"{[(c.name, c.public_port) for c in pending]}"
+                f"{[(c.name, c.public_port) for c in pending]}{extra}"
             )
+
+    def _probe_internal_ssh_banner(
+        self, jumphost_client: Any, internal_ip: str
+    ) -> bool:
+        # Run a banner read from the jumphost via /dev/tcp; bash exits 0
+        # only when it both connects and sees data starting with 'SSH-'.
+        if jumphost_client is None:
+            return True
+        cmd = (
+            "timeout 10 bash -c 'exec 3<>/dev/tcp/" + internal_ip + "/22; "
+            "head -c 4 <&3' 2>/dev/null"
+        )
+        try:
+            _stdin, stdout, _stderr = jumphost_client.exec_command(
+                cmd, timeout=20
+            )
+            data = stdout.read()
+            rc = stdout.channel.recv_exit_status()
+            return rc == 0 and data.startswith(b"SSH-")
+        except Exception:
+            return False
+
+    def _flush_jumphost_arp(
+        self, jumphost_client: Any, internal_ip: str
+    ) -> None:
+        if jumphost_client is None:
+            return
+        # Drop the cached neighbor entry and prod a few SYNs so the kernel
+        # re-ARPs immediately. Best-effort, swallow errors.
+        cmd = (
+            f"sudo -n ip neigh flush to {internal_ip} 2>/dev/null; "
+            f"sudo -n ip -s neigh show {internal_ip} 2>/dev/null; "
+            f"timeout 3 bash -c '</dev/tcp/{internal_ip}/22' "
+            "2>/dev/null; true"
+        )
+        try:
+            _stdin, stdout, _stderr = jumphost_client.exec_command(
+                cmd, timeout=15
+            )
+            stdout.channel.recv_exit_status()
+        except Exception:
+            pass
 
     def _probe_ssh_banner(self, host: str, port: int) -> bool:
         # Open the socket and read up to 255 bytes. A live OpenSSH server
