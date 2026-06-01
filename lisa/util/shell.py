@@ -283,11 +283,26 @@ class SshShell(InitializableMixin):
             self.connection_info.address, self.connection_info.port
         )
         if not is_ready:
-            raise TcpConnectionException(
-                self.connection_info.address,
-                self.connection_info.port,
-                tcp_error_code,
-            )
+            # Allow a registered self-heal hook (e.g. BMI NSG agent-IP
+            # refresh) to fix a silently-dropped path before we give up.
+            # The hook is expected to be idempotent and self-throttled.
+            hook = getattr(self, "_pre_connect_failure_hook", None)
+            if callable(hook):
+                try:
+                    hook()
+                except Exception:
+                    pass
+                is_ready, tcp_error_code = wait_tcp_port_ready(
+                    self.connection_info.address,
+                    self.connection_info.port,
+                    timeout=120,
+                )
+            if not is_ready:
+                raise TcpConnectionException(
+                    self.connection_info.address,
+                    self.connection_info.port,
+                    tcp_error_code,
+                )
 
         sock = self._establish_jump_boxes(
             address=self.connection_info.address,

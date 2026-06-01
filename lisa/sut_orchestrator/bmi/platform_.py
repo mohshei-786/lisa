@@ -255,6 +255,17 @@ class BmiPlatform(Platform):
                     )
                 ),
             }
+            # Wire the same NSG self-heal into the SSH shell's connect
+            # failure path. This covers spawn() retries from any tool
+            # (sysctl, ntttcp restore_system, etc.), not just Reboot.
+            try:
+                shell = getattr(node, "_shell", None)
+                if shell is not None:
+                    shell._pre_connect_failure_hook = node._bmi_diag[
+                        "nsg_refresh"
+                    ]  # type: ignore[attr-defined]
+            except Exception:
+                pass
             log.info(
                 f"BMI node '{ctx.name}' exposed at "
                 f"{ctx.public_address}:{ctx.public_port}"
