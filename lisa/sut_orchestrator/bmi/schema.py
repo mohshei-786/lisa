@@ -100,14 +100,6 @@ class BmiPlatformSchema:
     # First TCP port on the jumphost public IP that maps to BMI #1:22.
     # BMI #2 gets nat_port_start+1, etc.
     nat_port_start: int = 50001
-    # NSG inbound source address prefixes. Defaults to wildcard ``*``
-    # which is rejected by some Azure policies; set to a
-    # comma-separated list of CIDRs (e.g. ``52.159.208.214/32`` or
-    # ``10.0.0.0/8,131.107.0.0/16``) to comply. Maps to the ARM
-    # template's ``sourceAddressPrefixes`` parameter after splitting.
-    # Kept as a plain string (not List[str]) so it round-trips through
-    # LISA's ``-v key:value`` CLI override unchanged.
-    nsg_source_address_prefixes: str = "*"
 
     # ── Deployment knobs ───────────────────────────────────────────────
     # ARM template deployment timeout in seconds. BMI provisioning can

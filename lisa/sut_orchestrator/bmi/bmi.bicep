@@ -45,11 +45,6 @@ param jumphostInternalIp string = '10.0.1.250'
 
 param natPortStart int = 50001
 
-@description('Source IP address prefixes allowed by inbound NSG rules. Defaults to wildcard; set to a list of CIDRs to restrict access.')
-param sourceAddressPrefixes array = [
-  '*'
-]
-
 param bmiVmSize string
 
 param bmiImageId string
@@ -102,14 +97,6 @@ param natRouteAddressPrefix string = '0.0.0.0/0'
 ])
 param natRouteNextHopType string = 'VirtualAppliance'
 
-// --- NSG rule priorities ---
-@minValue(100)
-@maxValue(4096)
-param nsgAllowNatPortsPriority int = 200
-@minValue(100)
-@maxValue(4096)
-param nsgJumphostSshPriority int = 202
-
 // --- BMI host ---
 @minValue(0)
 param bmiHostPlatformFaultDomain int = 0
@@ -161,34 +148,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
   name: nsgName
   location: location
   properties: {
-    securityRules: [
-      {
-        name: 'AllowNATPorts'
-        properties: {
-          protocol: 'Tcp'
-          sourcePortRange: '*'
-          destinationPortRange: '${natPortStart}-${natPortEnd}'
-          sourceAddressPrefixes: sourceAddressPrefixes
-          destinationAddressPrefix: '*'
-          access: 'Allow'
-          priority: nsgAllowNatPortsPriority
-          direction: 'Inbound'
-        }
-      }
-      {
-        name: 'JumphostSSH'
-        properties: {
-          protocol: 'Tcp'
-          sourcePortRange: '*'
-          destinationPortRange: '22'
-          sourceAddressPrefixes: sourceAddressPrefixes
-          destinationAddressPrefix: '*'
-          access: 'Allow'
-          priority: nsgJumphostSshPriority
-          direction: 'Inbound'
-        }
-      }
-    ]
+    securityRules: []
   }
 }
 

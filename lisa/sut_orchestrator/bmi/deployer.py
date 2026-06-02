@@ -495,14 +495,6 @@ class BmiDeployer:
             "externalSubnetPrefix": {"value": self._runbook.external_subnet_prefix},
             "internalSubnetPrefix": {"value": self._runbook.internal_subnet_prefix},
             "natPortStart": {"value": self._runbook.nat_port_start},
-            "sourceAddressPrefixes": {
-                "value": [
-                    p.strip()
-                    for p in self._runbook.nsg_source_address_prefixes.split(",")
-                    if p.strip()
-                ]
-                or ["*"]
-            },
             "bmiVmSize": {"value": self._runbook.bmi_vm_size},
             "bmiImageId": {"value": self._runbook.bmi_image_sig},
         }
@@ -797,18 +789,14 @@ class BmiDeployer:
             "head -c 4 <&3' 2>/dev/null"
         )
         try:
-            _stdin, stdout, _stderr = jumphost_client.exec_command(
-                cmd, timeout=20
-            )
+            _stdin, stdout, _stderr = jumphost_client.exec_command(cmd, timeout=20)
             data = stdout.read()
             rc = stdout.channel.recv_exit_status()
             return rc == 0 and data.startswith(b"SSH-")
         except Exception:
             return False
 
-    def _flush_jumphost_arp(
-        self, jumphost_client: Any, internal_ip: str
-    ) -> None:
+    def _flush_jumphost_arp(self, jumphost_client: Any, internal_ip: str) -> None:
         if jumphost_client is None:
             return
         # Drop the cached neighbor entry and prod a few SYNs so the kernel
@@ -820,9 +808,7 @@ class BmiDeployer:
             "2>/dev/null; true"
         )
         try:
-            _stdin, stdout, _stderr = jumphost_client.exec_command(
-                cmd, timeout=15
-            )
+            _stdin, stdout, _stderr = jumphost_client.exec_command(cmd, timeout=15)
             stdout.channel.recv_exit_status()
         except Exception:
             pass

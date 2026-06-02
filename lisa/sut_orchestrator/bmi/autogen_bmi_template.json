@@ -90,15 +90,6 @@
       "type": "int",
       "defaultValue": 50001
     },
-    "sourceAddressPrefixes": {
-      "type": "array",
-      "defaultValue": [
-        "*"
-      ],
-      "metadata": {
-        "description": "Source IP address prefixes allowed by inbound NSG rules. Defaults to wildcard; set to a list of CIDRs to restrict access."
-      }
-    },
     "bmiVmSize": {
       "type": "string"
     },
@@ -174,18 +165,6 @@
         "None"
       ]
     },
-    "nsgAllowNatPortsPriority": {
-      "type": "int",
-      "defaultValue": 200,
-      "minValue": 100,
-      "maxValue": 4096
-    },
-    "nsgJumphostSshPriority": {
-      "type": "int",
-      "defaultValue": 202,
-      "minValue": 100,
-      "maxValue": 4096
-    },
     "bmiHostPlatformFaultDomain": {
       "type": "int",
       "defaultValue": 0,
@@ -260,34 +239,7 @@
       "name": "[variables('nsgName')]",
       "location": "[parameters('location')]",
       "properties": {
-        "securityRules": [
-          {
-            "name": "AllowNATPorts",
-            "properties": {
-              "protocol": "Tcp",
-              "sourcePortRange": "*",
-              "destinationPortRange": "[format('{0}-{1}', parameters('natPortStart'), variables('natPortEnd'))]",
-              "sourceAddressPrefixes": "[parameters('sourceAddressPrefixes')]",
-              "destinationAddressPrefix": "*",
-              "access": "Allow",
-              "priority": "[parameters('nsgAllowNatPortsPriority')]",
-              "direction": "Inbound"
-            }
-          },
-          {
-            "name": "JumphostSSH",
-            "properties": {
-              "protocol": "Tcp",
-              "sourcePortRange": "*",
-              "destinationPortRange": "22",
-              "sourceAddressPrefixes": "[parameters('sourceAddressPrefixes')]",
-              "destinationAddressPrefix": "*",
-              "access": "Allow",
-              "priority": "[parameters('nsgJumphostSshPriority')]",
-              "direction": "Inbound"
-            }
-          }
-        ]
+        "securityRules": []
       }
     },
     {
